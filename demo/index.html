@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SUQO embedded checkout — demo host page</title>
+    <style>
+      /* Deliberately aggressive host styles. Nothing here should reach the modal:
+         if the checkout picks any of this up, the inlined styles have a hole. */
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 48px 24px;
+        font: 400 16px/1.6 Georgia, serif;
+        color: #2b2b2b;
+        background: #fbf7f0;
+      }
+      button {
+        font: inherit;
+        background: #8a1538 !important;
+        color: #fff;
+        border: 3px dashed #000;
+        border-radius: 0;
+        padding: 14px 22px;
+        cursor: pointer;
+        text-transform: uppercase;
+      }
+      iframe { border: 8px solid red !important; }
+      a { color: #8a1538; }
+      main { max-width: 620px; margin: 0 auto; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; margin: 24px 0; }
+      label { display: block; font-size: 14px; margin-bottom: 6px; }
+      input {
+        font: inherit;
+        width: 100%;
+        padding: 10px 12px;
+        border: 2px solid #d8cec0;
+        background: #fff;
+      }
+      pre {
+        background: #2b2b2b;
+        color: #eee;
+        padding: 14px;
+        overflow-x: auto;
+        font: 400 13px/1.5 ui-monospace, monospace;
+        min-height: 90px;
+      }
+      h1 { font-size: 26px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Merchant page (demo)</h1>
+      <p>
+        A deliberately ugly host page with loud global CSS, so the modal's inlined
+        styles get a real test. Serve this from a different port than the checkout to
+        exercise the cross-origin path.
+      </p>
+
+      <label for="origin">Checkout origin</label>
+      <input id="origin" value="http://localhost:3000" />
+
+      <label for="ident" style="margin-top: 16px">Payment link id / renewal id</label>
+      <input id="ident" placeholder="SUB123" />
+
+      <div class="row">
+        <button id="pay">Open by pay id</button>
+        <button id="renew">Open by renew id</button>
+        <button data-suqo-pay-id="SUB123" data-suqo-origin="http://localhost:3000">
+          Declarative (data-suqo-pay-id)
+        </button>
+      </div>
+
+      <p>
+        Late-added buttons must work too, since binding is delegated from
+        <code>document</code>:
+      </p>
+      <div class="row"><button id="inject">Inject another button</button></div>
+      <div class="row" id="late"></div>
+
+      <h2 style="font-size: 18px">Callback log</h2>
+      <pre id="log">(nothing yet)</pre>
+    </main>
+
+    <script src="../public/suqo-checkout.js"></script>
+    <script>
+      var logEl = document.getElementById('log')
+      var lines = []
+      function log(label, value) {
+        lines.push(
+          label + (value === undefined ? '' : ' ' + JSON.stringify(value, null, 2))
+        )
+        logEl.textContent = lines.join('\n')
+      }
+
+      function handlers() {
+        return {
+          origin: document.getElementById('origin').value.trim(),
+          onReady: function () {
+            log('onReady')
+          },
+          onSuccess: function (params) {
+            log('onSuccess', params)
+          },
+          onFailure: function (status, params) {
+            log('onFailure ' + status, params)
+          },
+          onClose: function () {
+            log('onClose')
+          },
+        }
+      }
+
+      document.getElementById('pay').addEventListener('click', function () {
+        var opts = handlers()
+        opts.payId = document.getElementById('ident').value.trim() || 'SUB123'
+        SuqoCheckout.open(opts)
+      })
+
+      document.getElementById('renew').addEventListener('click', function () {
+        var opts = handlers()
+        opts.renewId = document.getElementById('ident').value.trim() || 'SUB123'
+        SuqoCheckout.open(opts)
+      })
+
+      document.getElementById('inject').addEventListener('click', function () {
+        var b = document.createElement('button')
+        b.textContent = 'Injected — pay SUB999'
+        b.setAttribute('data-suqo-pay-id', 'SUB999')
+        b.setAttribute('data-suqo-origin', document.getElementById('origin').value.trim())
+        document.getElementById('late').appendChild(b)
+        log('injected a button after load')
+      })
+
+      log('resolved origin: ' + SuqoCheckout.origin)
+    </script>
+  </body>
+</html>

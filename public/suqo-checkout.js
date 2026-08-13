@@ -368,6 +368,7 @@
       ready: false,
       failed: false,
       gatewayOpened: false,
+      resultHandled: false,
       aliveTimer: null,
       readyTimer: null,
       onMessage: null,
@@ -446,6 +447,15 @@
           break
 
         case MSG.result:
+          // The result deliberately travels more than one path — a same-origin
+          // channel from the return page, plus a post to the opener and to the
+          // opener's parent — because any single one of them can be severed. So
+          // arriving twice is expected, and the merchant's onSuccess must still fire
+          // exactly once: charging or fulfilling twice is the worst bug available
+          // here.
+          if (session.resultHandled) return
+          session.resultHandled = true
+
           var status = data.status
           var params = data.params || {}
           if (status === 'success') {

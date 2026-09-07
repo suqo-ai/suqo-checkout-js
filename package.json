@@ -8,6 +8,6 @@
     "sync": "node scripts/sync-to-frontend.mjs",
     "sync:check": "node scripts/sync-to-frontend.mjs --check",
     "check": "node --check public/suqo-checkout.js && echo 'suqo-checkout.js parses'",
-    "demo": "python3 -m http.server 4500 --directory demo"
+    "demo": "python3 -m http.server 4500"
   }
 }

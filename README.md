@@ -12,15 +12,15 @@ cannot restyle the block's chrome and the chrome cannot leak styles out.
 full contract — every message, every invariant, and why each one exists. The two halves ship
 from different repos, so a change to one that is not mirrored in the other fails silently.
 
-The app side lives in the `frontend` project — `src/lib/external-checkout/`,
-`src/components/external-checkout/`, and the page at `/external-checkout/[id]`.
+The app side lives in the `frontend` project — `src/lib/embed/`, `src/components/embed/`, and
+the page at `/c/[id]`.
 
 ## What it is for
 
-The merchant's own backend creates the subscription through the external API and hands the
-buyer its id. This collects the payment for it — nothing else. There is no phone step and
-no billing form in the block, because by the time it renders there is nothing left to ask:
-the subscription already knows who the buyer is and what they are buying.
+The merchant's own backend creates a **checkout session** through the API and hands the buyer
+its id. This collects the payment for it — nothing else. There is no phone step and no billing
+form in the block, because by the time it renders there is nothing left to ask: the session
+already knows who the buyer is and what they are buying.
 
 So the block shows exactly what is still undecided — which gateway, and consent — and the
 merchant keeps their own product page, their own summary, and their own layout.
@@ -30,13 +30,7 @@ merchant keeps their own product page, their own summary, and their own layout.
 ```html
 <script src="https://test.suqo.ai/suqo-checkout.js"></script>
 
-<div
-  id="my-payment-area"
-  data-suqo-subscription-id="4d7edf60-caef-427d-bcdc-b621e6c1ef85"
-  data-fullname="Nabin Shrestha"
-  data-email="nabin.shrestha@example.com"
-  data-address="Jhamsikhel, Lalitpur, Nepal"
-></div>
+<div id="my-payment-area" data-suqo-checkout-session-id="cks_9f2c41a8"></div>
 
 <script>
   SuqoCheckout.configure({
@@ -47,7 +41,14 @@ merchant keeps their own product page, their own summary, and their own layout.
 </script>
 ```
 
-That's the whole integration — attributes, and the callbacks that are the merchant's own
+One id, and no buyer details on the page at all — the session carries them, created server-side
+with your API key. Nothing about the customer touches the DOM, the URL, or anything a third-party
+script on your page could read.
+
+**Read ["When the callbacks don't fire"](#when-the-callbacks-dont-fire) before you build against
+`onSuccess`.** On some surfaces it cannot fire, and fulfilment has to come from the webhook.
+
+That's the whole integration — one attribute, and the callbacks that are the merchant's own
 business logic. The block mounts on load; nothing needs to call `mount()`. Discovery is
 re-run on DOM mutations, so a block rendered after the script runs (SPA views, lazy sections,
 CMS widgets) mounts with no re-initialisation step.
@@ -56,31 +57,19 @@ CMS widgets) mounts with no re-initialisation step.
 fire, not when the block is created, so script order does not decide whether a merchant hears
 about a payment.
 
-### The frame is inert without the SDK
+### The session is the credential
 
-`/external-checkout/<id>` does nothing on its own. Opened directly, or framed by anything that
-does not send the initialisation message, it renders **blank** and makes no backend calls at
-all — the payment element only starts once the SDK on the parent page initialises it.
+`/c/<sessionId>` renders from one public GET, so the id in that URL is the whole of what a
+visitor needs. That is deliberate — it is what removes the handshake, and with it the whole
+class of "the block is blank and I can't see why" failures.
 
-For a **shareable standalone payment link**, use `/pay/<subscription_id>` instead: same
-subscription id, full hosted checkout, collects the buyer's details itself.
+It is safe on the same grounds the hosted `/checkout/<sessionId>` already stands on, and those
+are conditions on the session rather than on this file: **single-use, short TTL, no PII in the
+payload, and a uniform 404 for expired, paid or unknown.** The id is semi-public by nature — it
+sits in your DOM — and nothing about it is a secret worth protecting beyond its lifetime.
 
-### Why the buyer's details are required
-
-The create-subscription call needs `full_name`, `email` and `address`. The hosted checkout
-collects them in a form; the embedded block has no form, because the merchant already holds
-them — the subscription is theirs, created by their own backend. So they pass them in, and the
-block sends them with the payment.
-
-Miss one and the block says which, before it opens any window or posts anything:
-
-> This payment is missing buyer details the merchant must supply on the checkout block —
-> full_name, email, address
-
-**They never travel in the frame URL.** They are handed over by `postMessage`, targeted at the
-checkout origin, once the frame reports itself alive. A URL ends up in server logs, browser
-history and any `Referer` that leaks, and none of those are places to put a buyer's name,
-email and address.
+For a **shareable standalone payment link**, use `/checkout/<sessionId>`: same id, full hosted
+checkout, its own chrome.
 
 ### Choosing where it renders
 
@@ -100,33 +89,28 @@ its own callbacks.
 
 ### Declarative attributes
 
-Read off the container, so each one carries its own subscription.
+Read off the container, so each block carries its own session.
 
 | Attribute | Meaning |
 | --- | --- |
-| `data-suqo-subscription-id="ID"` | The subscription to pay for |
-| `data-suqo-pay-id` / `data-suqo-renew-id` | Accepted aliases — both were subscription ids all along |
-| `data-fullname` | Buyer's name — **required** |
-| `data-email` | Buyer's email — **required** |
-| `data-address` | Buyer's address — **required** |
-| `data-phone` | Buyer's phone — optional |
-| `data-suqo-checkout="https://…"` | Full URL, used verbatim |
+| `data-suqo-checkout-session-id="cks_…"` | **The checkout session to pay.** The canonical spelling |
+| `data-suqo-session-id="cks_…"` | Short alias for the above |
+| `data-suqo-flow="redirect"` | Skip the iframe; render a link to the hosted checkout instead |
+| `data-suqo-flow-label="…"` | Label for that link. Default: "Continue to payment" |
+| `data-suqo-checkout="https://…"` | Full URL, used verbatim — the escape hatch for a non-standard path |
 | `data-suqo-origin="https://…"` | Per-element base URL override |
 | `data-suqo-checkout-block` | Marks the element as a container |
 
-Each of the four buyer fields also accepts a `data-suqo-`-prefixed spelling
-(`data-suqo-email`, …), which takes precedence. Prefer it if the host page already uses those
-bare attribute names for something of its own; otherwise the short spelling is fine.
+That is the whole surface. There are no attributes for the buyer, because there is nothing for
+you to tell us about them — the session already carries the customer.
 
 ### Programmatic
 
 ```js
 SuqoCheckout.mount('suqo-checkout-block', {
-  subscriptionId: '4d7edf60-caef-427d-bcdc-b621e6c1ef85',
-  fullName: 'Nabin Shrestha',       // required, or the attribute equivalent
-  email: 'nabin.shrestha@example.com',
-  address: 'Jhamsikhel, Lalitpur, Nepal',
-  phone: '9800000000',              // optional
+  sessionId: 'cks_9f2c41a8',        // or checkoutSessionId
+  flow: 'redirect',                 // optional — link instead of an iframe
+  flowLabel: 'Continue to payment', // optional label for that link
   origin: 'https://test.suqo.ai',   // optional per-mount override
   onReady:   function () {},
   onSuccess: function (params, message) {},          // gateway params + the backend's message
@@ -134,9 +118,14 @@ SuqoCheckout.mount('suqo-checkout-block', {
 })
 
 SuqoCheckout.unmount('suqo-checkout-block')
-SuqoCheckout.configure({ origin, elementId, onReady, onSuccess, onFailure })
+SuqoCheckout.configure({ origin, elementId, sessionId, flow, onReady, onSuccess, onFailure })
 SuqoCheckout.origin   // getter — the currently resolved base URL
 ```
+
+`configure({ sessionId })` is a convenience for the single-block case and is **consumed once**:
+the first block without an id of its own takes it, and it is then cleared. Ids belong on the
+container, because a page may carry several blocks — without the latch, a block rendered later
+by an SPA route change would mount the same session again.
 
 `configure()` names the element and sets defaults for auto-discovered blocks; per-element
 `data-suqo-*` attributes and per-mount options beat it.
@@ -162,6 +151,11 @@ Most specific wins:
 3. `SuqoCheckout.configure({ origin })` or `window.SUQO_CHECKOUT_ORIGIN`
 4. the origin the `<script>` itself was served from
 5. a hardcoded fallback constant
+
+The frame URL is then built from the session id on the block — `/c/<id>` — unless
+`data-suqo-checkout` gave a URL outright, which is used verbatim. The
+merchant's own origin rides in the URL **hash**, never the query string — see "The gateway
+window" below for why that distinction is not cosmetic.
 
 Step 4 means the common case needs no configuration at all: load the script from the
 checkout host and it targets that host.
@@ -209,31 +203,39 @@ frame → host, all tagged `{ source: 'suqo-checkout' }`:
 | `suqo:gateway` | a gateway window was just opened |
 | `suqo:result` `{status, params, message?}` | `success` \| `cancelled` \| `failed`, plus the backend's own message when it sent one |
 
-host → frame, the only message travelling that way:
+| `suqo:redirect` `{url, reason}` | no popup is available — the host navigates the top-level page to the hosted checkout |
+| `suqo:unavailable` `{reason}` | the session cannot be paid at all. Not a payment outcome, so no callback fires |
 
-| Message | Meaning |
-| --- | --- |
-| `suqo:init` `{customer}` | The buyer's details, sent on `alive` and again on `ready`. Targeted at the checkout origin, never `*` — it is the one message carrying personal data. Sent twice on purpose: the frame acknowledges nothing, and a duplicate just overwrites what it holds. |
+**Nothing travels the other way.** The host never posts to the frame: the session carries the
+buyer, so there is nothing you hold that the frame needs.
 
 The host validates `event.origin` on everything. It matches `event.source` against the
 frame for every message **except** `suqo:result`, which legitimately arrives from the
 gateway window rather than the frame — that one is routed by which block has a gateway open.
 
-## Two load deadlines
+## Three load deadlines
 
-`alive` and `ready` are separate messages because "nothing loaded" and "loading slowly"
-need different handling.
+They are separate because "nothing came back", "something came back but it wasn't ours" and
+"ours came back and is slow" need different handling — and each is armed by a real signal
+rather than by a guess about how long the previous stage should take.
 
-- **4s for `alive`.** Nothing ran at all — a CSP `frame-ancestors` block, a dead link, an
-  extension blocking frames. Not worth waiting on.
-- **~25s for `ready`, starting when `alive` arrives.** The frame exists and is merely slow,
-  so be patient.
+- **20s for `load`**, armed at mount, disarmed by the iframe's own `load` event. Nothing came
+  back at all.
+- **8s for `alive`**, armed only once `load` has fired. A document came back but never ran our
+  script — a CSP `frame-ancestors` block, an extension, someone else's error page at that URL.
+- **25s for `ready`**, armed when `alive` arrives. Our script ran but the block never mounted,
+  so this is the most patient of the three.
 
-On either timeout the spinner is replaced with an explanatory panel and an "open in a new
-tab" link, and a `console.warn` names the likely cause. `alive` is posted from the route's
-**layout**, not from the block — posted from inside the block it would fire at the same
-moment as `ready`, making the split decorative and tripping the 4s failure path on any
-genuinely slow load.
+On any of them the spinner is replaced with an explanatory panel and an "open in a new tab"
+link, and a `console.warn` names the likely cause — including a `no-cors` probe of the origin,
+so the console can tell *connection refused* from *frame blocked*, which look identical from
+outside and need opposite fixes.
+
+Do not shorten these. An earlier version used a blind 4s `alive` timer and failed a cold
+Next.js compile measured at 4.8s as "blocked" — the failure panel appeared before the document
+had even arrived. `alive` is posted from the route's **layout**, not from the block; posted
+from inside the block it would fire at the same moment as `ready` and make the split
+decorative.
 
 ## The gateway window
 
@@ -294,24 +296,66 @@ about, so asking it yields "Transaction not found."
 To let a buyer try again, re-`mount()` the container: a fresh attempt opens a new gateway window
 and delivers a new result, while duplicates within one attempt stay suppressed.
 
-### `return_url` is not followed inside the embed
+### `return_url`, and when it is followed
 
-A seller who has configured a `return_url` will find it **does not fire for embedded payments**,
-and that is deliberate rather than an oversight.
+| Surface | `return_url` followed? | Why |
+|---|---|---|
+| Popup path (the usual one) | **No** | The buyer never left the merchant's page. The outcome arrives there through `onSuccess` / `onFailure`, and following it would render the seller's return page inside a window that is about to close |
+| Redirect path (`suqo:redirect`, `data-suqo-flow="redirect"`) | **Yes** | The buyer *is* on SUQO's hosted page. It is the only way back |
+| Hosted checkout opened directly | **Yes** | Unchanged, and always has been |
 
-The `return_url` exists to bring a buyer back to the seller's own site after the gateway took
-them away from it. An embedded buyer never left: they are on the merchant's page the whole time,
-and the merchant gets the outcome there through `onSuccess` / `onFailure`. Following it would
-only render the seller's return page inside a window that is about to close.
+So the same seller setting behaves differently depending on which surface the buyer got, which
+is why it is worth stating rather than leaving to be discovered.
 
 The return page tells the two cases apart with `isGatewayWindow()`. `window.name` is the signal
 that carries — it survives the whole cross-origin round trip, which is worth stating because the
 opposite is the reasonable guess (Chrome does clear `window.name` on cross-origin navigation,
 but the name is intact again by the time the buyer is back on the checkout origin).
-`window.opener` is a fallback only: it survives a navigation the opener drives, but not
-necessarily a browser-initiated one, and a gateway serving `Cross-Origin-Opener-Policy:
-same-origin` severs it. The hosted checkout has neither signal, so it redirects exactly as it
-always did.
+There is deliberately **no `window.opener` fallback**. It looks like free redundancy and is not:
+the hosted checkout is sometimes opened with `window.open('', '_blank')`, so that tab carries an
+opener for its whole life — and treating one as proof of the embed would silently drop the
+seller's `return_url` on a flow that has nothing to do with this SDK. It buys nothing either: if
+the opener were severed, the result could not be posted over it regardless.
+
+### When the callbacks don't fire
+
+`onSuccess` and `onFailure` reach you over `postMessage`, which needs your page to still be
+open. On two surfaces it will not be:
+
+| Surface | Path | You hear about it via |
+|---|---|---|
+| Desktop or mobile browser | iframe + popup | `onSuccess` / `onFailure` |
+| WebView with multiple windows enabled | iframe + popup | `onSuccess` / `onFailure` |
+| WebView without it; in-app browsers (Instagram, Facebook, LINE) | the frame hands the page to SUQO's hosted checkout | **`return_url` + webhook only** |
+| You opted out with `data-suqo-flow="redirect"` | a link to SUQO's hosted checkout | **`return_url` + webhook only** |
+
+On the last two your page is gone before the payment settles, so nothing can call back into it.
+You cannot tell in advance which row a given buyer will land on — a buyer opening your link from
+Instagram's in-app browser gets a different row than the same buyer on desktop.
+
+> **If your page might ever be opened inside an app, the session you create must carry a
+> `return_url`.** It is the only way the buyer gets back to you.
+>
+> **Fulfil from the webhook, not from `onSuccess`.** Treat the callbacks as a desktop-case
+> convenience. A merchant who ships orders from `onSuccess` has no fulfilment path at all on the
+> redirect surfaces.
+
+### Opting out of the embed
+
+If you already know you are inside your own WebView and would rather not render a payment block
+the buyer cannot complete, say so and the SDK renders a link to the hosted checkout instead:
+
+```html
+<div
+  data-suqo-checkout-block
+  data-suqo-checkout-session-id="cks_9f2c41a8"
+  data-suqo-flow="redirect"
+  data-suqo-flow-label="Continue to payment"
+></div>
+```
+
+A link, not an automatic navigation — a block that took the page over on mount would fire from
+your own router on an SPA, and Back would re-trigger it and trap the buyer.
 
 **Nothing may be appended to the gateway's return URL query string.** NPS appends its own
 parameters with a literal `?` rather than `&`, so an added `?embed=1` comes back as
@@ -323,9 +367,9 @@ relationship rather than a URL flag.
 
 These are documented, not solved.
 
-- **Third-party cookies.** The subscription-id exchange happens inside a third-party frame,
-  so Safari — and Chrome after third-party cookie phase-out — can break it. The inline shape
-  does not change this.
+- **Third-party cookies.** Anything the frame stores runs in a third-party context, so
+  Safari — and Chrome after third-party cookie phase-out — can break it. The inline shape does
+  not change this.
 - **No `frame-ancestors` CSP.** Framing works precisely because no such header exists, which
   also means *any* site can frame the checkout. `parentOrigin` narrows who the frame's own
   messages are addressed to, but enforces nothing. A per-merchant allowlist is needed before
@@ -376,9 +420,13 @@ directory alone — a prebuild hook reaching `../js-checkout` would work on a la
 in the image. `sync:check` exists so the drift is loud rather than silent; a stale loader
 speaking an older protocol than the app is the failure mode worth catching.
 
-**If this later moves to its own host or CDN**, one thing has to change: resolution step 4
-would resolve to the CDN's origin, not the checkout's, so `data-suqo-subscription-id` would
-build a URL on the wrong host. Either stamp `FALLBACK_ORIGIN` into the served copy at deploy
-time, or read an origin off the script tag — neither is implemented yet. Everything else
-about the protocol is origin-agnostic already: the host validates messages against the
-origin of the iframe URL it opened, not against where the script came from.
+**Do not move this file to a CDN without doing one of two things first.** Resolution step 4
+would then resolve to the CDN's origin rather than the checkout's, so every block would build
+its frame URL on the wrong host. Either stamp `FALLBACK_ORIGIN` into the served copy at deploy
+time, or make `data-suqo-origin` mandatory in the documented snippet — neither is implemented,
+and this is a precondition rather than a caveat.
+
+Note `ownScriptTag()` matches on filename, so it survives a CDN move; only the origin it
+yields is wrong. Everything else about the protocol is origin-agnostic already: the host
+validates messages against the origin of the iframe URL it opened, not against where the
+script came from.

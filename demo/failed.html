@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Payment unsuccessful — Merchant page (demo)</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 48px 24px;
+      font: 400 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #425466;
+      background: #f5f6fa;
+    }
+
+    main {
+      max-width: 560px;
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid #eaeaea;
+      border-radius: 16px;
+      padding: 32px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      color: #0d062d;
+    }
+
+    pre {
+      background: #f5f6fa;
+      border-radius: 8px;
+      padding: 12px;
+      overflow-x: auto;
+      font-size: 13px;
+    }
+
+    a {
+      color: #635bff;
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>Payment unsuccessful</h1>
+    <p>
+      This page is the <em>merchant's</em>, not SUQO's. The block never announced anything —
+      it reported the outcome to <code>onFailure</code>, and the merchant's own code decided
+      to send the buyer here. That is the whole point of the split.
+    </p>
+    <p>What the callback was given:</p>
+    <pre id="detail">(nothing in the query string)</pre>
+    <p><a href="./index.html">Back to the demo</a></p>
+  </main>
+
+  <script>
+    var params = new URLSearchParams(window.location.search)
+    var entries = {}
+    params.forEach(function (value, key) {
+      entries[key] = value
+    })
+    if (Object.keys(entries).length) {
+      document.getElementById('detail').textContent = JSON.stringify(entries, null, 2)
+    }
+  </script>
+</body>
+
+</html>

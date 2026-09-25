@@ -87,15 +87,24 @@
 
     <h2>The whole integration</h2>
     <p>
-      The subscription is created by the merchant's backend through the external API; the
-      buyer's details come from the merchant, because the block has no form to ask for them.
-      Mounts on load.
+      A checkout session is created by the merchant's backend with their API key, and already
+      carries the buyer — so nothing about the customer appears on this page at all. One
+      attribute. Mounts on load.
     </p>
 
     <div class="block" id="my-payment-areaa" data-suqo-origin="http://localhost:3000"
-      data-suqo-subscription-id="32cfdc77-fd1e-4af8-8452-76e350e92aae" data-fullname="Rabin Shrestha"
-      data-email="nabin.shrestha@example.com" data-address="Jhamsikhel, Lalitpur, Nepal" data-phone="9800000001"></div>
+      data-suqo-checkout-session-id="cks_qrf0OKBfF"></div>
 
+    <!-- <h2>Opted out — <code>data-suqo-flow="redirect"</code></h2>
+    <p>
+      For a merchant who already knows they are inside their own WebView. No iframe at all:
+      just a link to the hosted checkout, which works everywhere popups do not. A link rather
+      than an automatic navigation, because a block that took this page over on mount would
+      fire again every time the buyer pressed Back.
+    </p>
+
+    <div class="block" data-suqo-checkout-block data-suqo-origin="http://localhost:3000"
+      data-suqo-checkout-session-id="cks_xiXrTzus3" data-suqo-flow="redirect"></div> -->
 
     <h2>Callback log</h2>
     <pre id="log">(nothing yet)</pre>

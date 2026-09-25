@@ -2,14 +2,15 @@
  * SUQO embedded checkout — drop-in loader.
  *
  *   <script src="https://test.suqo.ai/suqo-checkout.js"></script>
- *   <div id="suqo-checkout-block" data-suqo-subscription-id="SUB123"></div>
+ *   <div id="suqo-checkout-block" data-suqo-checkout-session-id="cks_9f2c41a8"></div>
  *
  * Renders the SUQO payment block *inline*, where the merchant put the div. No overlay, no
  * modal, no page takeover: it is a payment element in their layout, like any other field.
  *
- * The subscription is created by the merchant's own backend through the external API; this
- * only collects the payment for it. So the block shows what is actually left to decide —
- * which gateway, and consent — and nothing else.
+ * The checkout session is created by the merchant's own backend through the API and already
+ * carries the buyer; this only collects the payment for it. So the block shows what is
+ * actually left to decide — which gateway, and consent — and nothing else. Nothing about the
+ * customer appears on the merchant's page at all.
  *
  * Source of truth: the `js-checkout` project. `frontend/public/suqo-checkout.js` is a synced
  * copy — that is the one actually served. Edit here, then run `npm run sync`.
@@ -37,8 +38,8 @@
   var CONTAINER_ATTR = 'data-suqo-checkout-block'
 
   /**
-   * Shared with the app: src/lib/external-checkout/embed.ts opens the gateway window under
-   * this exact name, or the host cannot take a handle on it to clean up.
+   * Shared with the app: src/lib/embed/bridge.ts opens the gateway window under this exact
+   * name, or the host cannot take a handle on it to clean up.
    */
   var GATEWAY_WINDOW_NAME = 'suqo_gateway'
 
@@ -53,6 +54,7 @@
     ready: 'suqo:ready',
     resize: 'suqo:resize',
     gateway: 'suqo:gateway',
+    redirect: 'suqo:redirect',
     result: 'suqo:result',
   }
 
@@ -81,6 +83,15 @@
     origin: null,
     /** Where the block renders. Set via configure({elementId}) or data-suqo-element-id. */
     elementId: null,
+    /**
+     * A checkout session id from configure(), consumed by the first block that has none of
+     * its own and then cleared. Ids belong on the container — a page may carry several
+     * blocks — and without the latch the MutationObserver would apply this one to every
+     * container that appears later, mounting the same session over and over on an SPA.
+     */
+    sessionId: null,
+    /** 'redirect' to skip the iframe entirely. See mountRedirect. */
+    flow: null,
     onReady: null,
     onSuccess: null,
     onFailure: null,
@@ -144,14 +155,24 @@
   function buildUrl(opts) {
     var base = resolveOrigin(opts.origin)
     var url = opts.url || null
+    // `custom` is a URL given verbatim, so this script cannot know what is on the other end —
+    // which is why `mountRedirect` refuses it: there is no session id to build a hosted URL from.
+    var flow = url ? 'custom' : null
 
     if (!url) {
-      var id = opts.subscriptionId || opts.payId || opts.renewId
-      if (!id) return null
-      url = base + '/external-checkout/' + encodeURIComponent(id)
+      if (!opts.sessionId) return null
+      flow = 'session'
+      url = base + '/c/' + encodeURIComponent(opts.sessionId)
     }
 
-    return url + '#parentOrigin=' + encodeURIComponent(window.location.origin)
+    // Appended in exactly one place, so the hash rule above holds by construction rather
+    // than by remembering it at each branch.
+    return { url: url + '#parentOrigin=' + encodeURIComponent(window.location.origin), flow: flow }
+  }
+
+  /** The hosted checkout for a session — where both fallbacks send the buyer. */
+  function hostedCheckoutUrl(base, sessionId) {
+    return trimTrailingSlash(base) + '/checkout/' + encodeURIComponent(sessionId)
   }
 
   // ───────────────────────── DOM helpers ─────────────────────────
@@ -167,12 +188,11 @@
     return applyStyle(document.createElement(tag), style || {})
   }
 
-  /** First of: explicit option, prefixed attribute, bare attribute. */
-  function attr(el, prefixed, bare, override) {
-    var value = override || el.getAttribute(prefixed) || el.getAttribute(bare)
-    if (!value) return undefined
-    value = String(value).replace(/^\s+|\s+$/g, '')
-    return value || undefined
+  /** The configured session id, consumed once so it cannot be reused by a later block. */
+  function takeConfiguredSessionId() {
+    var id = defaults.sessionId
+    defaults.sessionId = null
+    return id
   }
 
   function resolveElement(target) {
@@ -220,6 +240,33 @@
     }
   }
 
+  /**
+   * The one button this script ever draws: leave the frame for a page that works.
+   *
+   * An anchor rather than a button with a handler. A click on it is a real navigation, so it
+   * cannot be refused the way a programmatic one can, and it brings middle-click, long-press,
+   * "open in new tab" and a status-bar preview with it for free.
+   */
+  function buildContinueLink(url, label, target) {
+    var link = make('a', {
+      display: 'inline-block',
+      marginTop: '4px',
+      padding: '11px 20px',
+      borderRadius: '10px',
+      background: '#635bff',
+      color: '#ffffff',
+      font: '600 15px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+      textDecoration: 'none',
+    })
+    link.href = url
+    if (target) {
+      link.target = target
+      link.rel = 'noopener noreferrer'
+    }
+    link.textContent = label
+    return link
+  }
+
   function buildFailurePanel(url, reason) {
     var wrap = make('div', {
       position: 'absolute',
@@ -242,20 +289,7 @@
     var body = make('div', { maxWidth: '340px' })
     body.textContent = reason
 
-    var link = make('a', {
-      display: 'inline-block',
-      marginTop: '4px',
-      padding: '11px 20px',
-      borderRadius: '10px',
-      background: '#635bff',
-      color: '#ffffff',
-      font: '600 15px/1 inherit',
-      textDecoration: 'none',
-    })
-    link.href = url
-    link.target = '_blank'
-    link.rel = 'noopener noreferrer'
-    link.textContent = 'Open the payment page in a new tab'
+    var link = buildContinueLink(url, 'Open the payment page in a new tab', '_blank')
 
     wrap.appendChild(title)
     wrap.appendChild(body)
@@ -265,8 +299,8 @@
 
   // ───────────────────────── sessions ─────────────────────────
   //
-  // One entry per mounted container. A page may carry several blocks — two subscriptions on
-  // one page is an ordinary thing for a merchant to want — so nothing here may live in a
+  // One entry per mounted container. A page may carry several blocks — two checkout sessions
+  // on one page is an ordinary thing for a merchant to want — so nothing here may live in a
   // module-level singleton.
 
   var sessions = []
@@ -280,7 +314,9 @@
 
   function sessionForFrame(source) {
     for (var i = 0; i < sessions.length; i++) {
-      if (sessions[i].iframe.contentWindow === source) return sessions[i]
+      // Guarded: a redirect-flow block is a registered session with no iframe at all, and an
+      // unguarded read here would throw on *every* message for *every other* block on the page.
+      if (sessions[i].iframe && sessions[i].iframe.contentWindow === source) return sessions[i]
     }
     return null
   }
@@ -324,6 +360,54 @@
     }
   }
 
+  /**
+   * Takes the merchant's page to the hosted checkout, on the frame's request.
+   *
+   * The host owns this because the frame cannot: its sandbox deliberately omits
+   * `allow-top-navigation-by-user-activation`, and those flags are not changing — they are
+   * what keep the merchant's scripts away from the payment payload.
+   *
+   * The URL is re-validated as same-origin even though `event.origin` was already checked,
+   * and the distinction matters: `event.origin` proves the checkout origin *asked*, not that
+   * what it asked for is safe. Without this, any reflected value inside the checkout app
+   * becomes an open redirect on every merchant page that embeds this script — a far better
+   * exploit than the same bug confined to one origin. The payload is by design a SUQO hosted
+   * URL, so the check costs the legitimate path nothing.
+   */
+  function navigateTop(session, rawUrl) {
+    var parsed
+    try {
+      parsed = new URL(String(rawUrl), window.location.href)
+    } catch (e) {
+      console.warn('[SuqoCheckout] ignoring an unparseable redirect url:', rawUrl)
+      return
+    }
+
+    // Kept explicit even though the origin check below subsumes it — `new URL('javascript:…')`
+    // has an origin of "null" and would fail there anyway. One line a security reviewer can
+    // read beats a footnote explaining why it is implied.
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      console.warn('[SuqoCheckout] refusing a non-http(s) redirect url:', rawUrl)
+      return
+    }
+
+    if (parsed.origin !== session.origin) {
+      console.warn('[SuqoCheckout] refusing a cross-origin redirect url:', rawUrl)
+      return
+    }
+
+    session.redirecting = true
+    // Necessary rather than tidy: the READY deadline can fire during the unload window and
+    // paint the failure panel over a page that is already leaving.
+    clearTimers(session)
+    closeGatewayWindow()
+
+    // `href`, not `replace`: the merchant's page stays in history, so Back returns the buyer
+    // to the shop. A stale block on that return is harmless — it re-mounts, and the session
+    // reports itself spent.
+    window.location.href = parsed.href
+  }
+
   // ───────────────────────── mount / unmount ─────────────────────────
 
   function mount(target, options, auto) {
@@ -339,41 +423,35 @@
     // options win: a caller naming an id meant that id.
     var config = {
       url: opts.url || container.getAttribute('data-suqo-checkout') || undefined,
-      subscriptionId:
-        opts.subscriptionId ||
-        container.getAttribute('data-suqo-subscription-id') ||
+      // The canonical spelling plus one short alias. The long one is easy to mistype, and a
+      // near-miss falls through to the silent no-id path below — a blank div and nothing in
+      // the console.
+      sessionId:
+        opts.sessionId ||
+        opts.checkoutSessionId ||
+        container.getAttribute('data-suqo-checkout-session-id') ||
+        container.getAttribute('data-suqo-session-id') ||
+        takeConfiguredSessionId() ||
         undefined,
-      // Kept as aliases: both were subscription ids all along, and both now resolve to the
-      // same page.
-      payId: opts.payId || container.getAttribute('data-suqo-pay-id') || undefined,
-      renewId: opts.renewId || container.getAttribute('data-suqo-renew-id') || undefined,
       origin: opts.origin || container.getAttribute('data-suqo-origin') || undefined,
     }
 
-    // Buyer details, read off the container so a merchant needs no JavaScript for them. The
-    // `data-suqo-` prefixed spelling is preferred — it cannot collide with attributes the
-    // host page already uses — but the bare spelling is accepted too, because it is the
-    // shorter thing to write and the collision risk is the merchant's own to take.
-    var customer = {
-      full_name: attr(container, 'data-suqo-fullname', 'data-fullname', opts.fullName),
-      email: attr(container, 'data-suqo-email', 'data-email', opts.email),
-      address: attr(container, 'data-suqo-address', 'data-address', opts.address),
-      phone: attr(container, 'data-suqo-phone', 'data-phone', opts.phone),
-    }
-
-    var url = buildUrl(config)
-    if (!url) {
+    var built = buildUrl(config)
+    if (!built) {
       // Silent on the discovery path: a container the merchant will drive with mount() later
       // is an ordinary state to find on the page, not a mistake worth a console warning on
       // every mutation batch. An explicit mount() with no id is a caller error, so it speaks.
       if (!auto) {
         console.warn(
-          '[SuqoCheckout] no subscription id on the block. Add data-suqo-subscription-id, or ' +
-            'pass subscriptionId to mount().'
+          '[SuqoCheckout] no id on the block. Add data-suqo-checkout-session-id, or pass ' +
+            'sessionId to mount().'
         )
       }
       return api
     }
+
+    var url = built.url
+    var flow = built.flow
 
     var frameOrigin
     try {
@@ -381,6 +459,23 @@
     } catch (e) {
       console.warn('[SuqoCheckout] unparseable checkout url:', url)
       return api
+    }
+
+    // Before any DOM mutation below: everything past this point is iframe machinery, and the
+    // redirect flow wants none of it.
+    var requestedFlow =
+      opts.flow || container.getAttribute('data-suqo-flow') || defaults.flow || 'auto'
+    if (requestedFlow === 'redirect') {
+      if (flow !== 'session') {
+        // A verbatim `data-suqo-checkout` URL carries no session id, so there is nothing to
+        // build `/checkout/<id>` from.
+        console.warn(
+          '[SuqoCheckout] data-suqo-flow="redirect" needs data-suqo-checkout-session-id. ' +
+            'Falling back to the embedded block.'
+        )
+      } else {
+        return mountRedirect(container, config, opts)
+      }
     }
 
     // Remounting the same container replaces what is there rather than stacking a second frame.
@@ -433,7 +528,8 @@
       spinner: spinner,
       url: url,
       origin: frameOrigin,
-      customer: customer,
+      flow: flow,
+      checkoutSessionId: config.sessionId || null,
       previousPosition: previousPosition,
       previousMinHeight: previousMinHeight,
       // Stored as given, without folding in the defaults. Resolution happens when a callback
@@ -451,6 +547,7 @@
       failed: false,
       gatewayOpened: false,
       resultHandled: false,
+      redirecting: false,
       loadTimer: null,
       aliveTimer: null,
       readyTimer: null,
@@ -487,13 +584,75 @@
     return api
   }
 
+  /**
+   * The explicit opt-out: render a link to the hosted checkout, and no frame at all.
+   *
+   * For a merchant who already knows they are inside their own WebView and would rather not
+   * show a payment block the buyer cannot complete.
+   *
+   * It renders a link rather than navigating on mount, and that is not timidity. Mount fires
+   * from DOMContentLoaded or from the MutationObserver, so on an SPA the merchant's router
+   * would render the block and the page would instantly leave; Back would re-mount and
+   * re-navigate, trapping the buyer with no defence short of a sessionStorage hack; a
+   * navigation with no transient activation is increasingly refused outright; and taking the
+   * page over contradicts the one thing this script promises — a payment element in their
+   * layout.
+   */
+  function mountRedirect(container, config, opts) {
+    if (sessionFor(container)) unmount(container)
+
+    var href = hostedCheckoutUrl(resolveOrigin(config.origin), config.sessionId)
+    var label =
+      opts.flowLabel ||
+      container.getAttribute('data-suqo-flow-label') ||
+      // Not "Pay now": the buyer is not paying yet, and the next screen asking them to pick a
+      // gateway after a button that promised payment is where the drop-off happens.
+      'Continue to payment'
+
+    var link = buildContinueLink(href, label, null)
+    container.appendChild(link)
+
+    // Registered like any other block, so unmount() works uniformly and the observer's
+    // sessionFor() check still stops it from mounting twice. Every consumer of this list now
+    // guards on `iframe` being present.
+    sessions.push({
+      container: container,
+      iframe: null,
+      spinner: null,
+      link: link,
+      url: href,
+      origin: resolveOrigin(config.origin),
+      flow: 'redirect',
+      checkoutSessionId: config.sessionId,
+      previousPosition: container.style.position,
+      previousMinHeight: container.style.minHeight,
+      handlers: {
+        onReady: opts.onReady,
+        onSuccess: opts.onSuccess,
+        onFailure: opts.onFailure,
+      },
+      loaded: true,
+      alive: true,
+      ready: true,
+      failed: false,
+      gatewayOpened: false,
+      resultHandled: false,
+      redirecting: false,
+      loadTimer: null,
+      aliveTimer: null,
+      readyTimer: null,
+    })
+
+    return api
+  }
+
   function unmount(target) {
     var container = resolveElement(target)
     var session = container ? sessionFor(container) : null
     if (!session) return api
 
     clearTimers(session)
-    session.spinner.stop()
+    if (session.spinner) session.spinner.stop()
 
     for (var i = 0; i < sessions.length; i++) {
       if (sessions[i] === session) {
@@ -502,8 +661,13 @@
       }
     }
 
-    if (session.iframe.parentNode) session.iframe.parentNode.removeChild(session.iframe)
-    if (session.spinner.el.parentNode) {
+    if (session.iframe && session.iframe.parentNode) {
+      session.iframe.parentNode.removeChild(session.iframe)
+    }
+    if (session.link && session.link.parentNode) {
+      session.link.parentNode.removeChild(session.link)
+    }
+    if (session.spinner && session.spinner.el.parentNode) {
       session.spinner.el.parentNode.removeChild(session.spinner.el)
     }
     if (session.panel && session.panel.parentNode) {
@@ -614,20 +778,12 @@
     return typeof fn === 'function' ? fn : null
   }
 
-  function sendCustomer(session) {
-    var frame = session.iframe.contentWindow
-    if (!frame) return
-    try {
-      frame.postMessage(
-        { source: MESSAGE_SOURCE, type: 'suqo:init', customer: session.customer },
-        session.origin
-      )
-    } catch (e) {
-      /* frame went away mid-flight */
-    }
-  }
-
   // ───────────────────────── messages ─────────────────────────
+  //
+  // One direction only. The frame speaks; the host listens and acts. There is no host-to-frame
+  // message and none should be added: a checkout session carries the buyer server-side, so
+  // there is nothing this script knows that the frame needs, and anything sent down would be
+  // buyer-shaped data on the wire for no reason.
 
   window.addEventListener('message', function (event) {
     var data = event.data
@@ -651,10 +807,6 @@
         session.loadTimer = null
         session.aliveTimer = null
 
-        // The frame is listening now, so hand over the buyer details. Targeted at the frame's
-        // own origin rather than '*': this is the one message that carries personal data, and
-        // it must not be readable by anything else that happens to be framed here.
-        sendCustomer(session)
         // The frame is real, just not mounted yet — extend the budget.
         session.readyTimer = window.setTimeout(function () {
           failSession(
@@ -669,10 +821,6 @@
 
       case MSG.ready:
         session.ready = true
-        // Sent again, deliberately. The frame acknowledges nothing, and a listener that
-        // re-attached between `alive` and `ready` would otherwise have missed the first copy.
-        // The frame just overwrites what it holds, so a duplicate costs nothing.
-        sendCustomer(session)
         clearTimers(session)
         removeSpinner(session)
         session.container.style.minHeight = session.previousMinHeight
@@ -697,6 +845,20 @@
         // A fresh attempt: whatever the previous one resolved to is spent, so the next
         // result is a new one and must be delivered.
         session.resultHandled = false
+        break
+
+      case MSG.redirect:
+        // No flow gate. Every block is a checkout block, and what actually guards this is the
+        // payload check in `navigateTop` — the URL must be same-origin with the frame.
+        //
+        // A navigation is already committed; a second is noise at best.
+        if (session.redirecting) return
+
+        // The merchant's callbacks cannot fire past here — their document is about to be
+        // destroyed — so `return_url` on the session is the only way the buyer gets back to
+        // them. onFailure is deliberately not called: nothing settled badly, nothing settled
+        // at all.
+        navigateTop(session, data.url)
         break
 
       case MSG.result:
@@ -820,6 +982,12 @@
       // `container` is accepted as an alias so an earlier integration keeps working.
       var el = options.elementId || options.container
       if (el) defaults.elementId = String(el).replace(/^#/, '')
+      // Latched — see `defaults.sessionId`.
+      if (options.sessionId || options.checkoutSessionId) {
+        defaults.sessionId = String(options.sessionId || options.checkoutSessionId)
+      }
+      // Unlike an id, a flow genuinely is a property of the page, so it is not latched.
+      if (options.flow) defaults.flow = String(options.flow)
       if (options.onReady) defaults.onReady = options.onReady
       if (options.onSuccess) defaults.onSuccess = options.onSuccess
       if (options.onFailure) defaults.onFailure = options.onFailure

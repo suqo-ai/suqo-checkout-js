@@ -160,6 +160,21 @@ window" below for why that distinction is not cosmetic.
 Step 4 means the common case needs no configuration at all: load the script from the
 checkout host and it targets that host.
 
+### Which host to load it from
+
+Sandbox and live are two deployments of the same build, and each serves its own copy of the
+loader. Point the `<script>` at the one you are on and everything else follows from step 4:
+
+| You are testing against | Script tag |
+|---|---|
+| Sandbox data | `https://test.suqo.ai/suqo-checkout.js` |
+| Live data | `https://app.suqo.ai/suqo-checkout.js` |
+
+Going live is that one-word change to the `src`. There is no separate CDN host, and
+`data-suqo-origin` stays an escape hatch rather than something you have to set — if you do set
+it, make sure it names the same deployment as the script tag, or the block will build its frame
+on one environment while your session lives on the other.
+
 ## The frame
 
 ```html

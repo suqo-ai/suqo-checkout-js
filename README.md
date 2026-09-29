@@ -8,9 +8,12 @@ One file, `public/suqo-checkout.js`. No build step, no dependencies, ES5, one gl
 (`SuqoCheckout`). Every style is inlined on the elements it creates, so a host page's CSS
 cannot restyle the block's chrome and the chrome cannot leak styles out.
 
-**Reimplementing or changing either half? Read [PROTOCOL.md](./PROTOCOL.md) first.** It is the
+**Reimplementing or changing either half? Read [docs/protocol.md](./docs/protocol.md) first.** It is the
 full contract — every message, every invariant, and why each one exists. The two halves ship
 from different repos, so a change to one that is not mirrored in the other fails silently.
+
+New to this repo? [docs/development.md](./docs/development.md) is the orientation doc — repo
+layout, how the code is organized, and the edit/check/sync workflow.
 
 The app side lives in the `frontend` project — `src/lib/embed/`, `src/components/embed/`, and
 the page at `/c/[id]`.

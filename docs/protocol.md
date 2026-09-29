@@ -10,7 +10,8 @@ whose outcome never reaches the merchant.
 
 - Host: `js-checkout/public/suqo-checkout.js` (this repo — the source of truth)
 - Frame: `frontend/src/lib/embed/`, `frontend/src/components/embed/`, `frontend/src/app/c/[id]/`
-- The served copy of the host is `frontend/public/suqo-checkout.js`; see **Sync** in README.md.
+- The served copy of the host is `frontend/public/suqo-checkout.js`; see **Sync** in
+  [README.md](../README.md).
 
 ---
 

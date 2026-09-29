@@ -2,7 +2,7 @@
   "name": "suqo-js-checkout",
   "version": "0.1.0",
   "private": true,
-  "description": "Drop-in JS loader that opens the SUQO checkout in a modal iframe on a merchant's site",
+  "description": "Drop-in JS loader that renders the SUQO checkout inline, in a sandboxed iframe on a merchant's site",
   "type": "module",
   "scripts": {
     "sync": "node scripts/sync-to-frontend.mjs",

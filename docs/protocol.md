@@ -129,8 +129,9 @@ merchant.com/checkout
                         │
                         └─ frame settles → closes the gateway window
                                         → postToHost('suqo:result', …)
+                                        → frame renders its own terminal verdict
                                           → host fires onSuccess / onFailure
-                                            → MERCHANT decides what the buyer sees next
+                                            → MERCHANT decides what happens next
 ```
 
 ---
@@ -150,7 +151,7 @@ page is full of unrelated `postMessage` traffic (analytics, chat widgets, other 
 | `suqo:gateway` | — | A gateway window was just opened | Remember it, for `pagehide` cleanup; clear the result latch |
 | `suqo:redirect` | `{url, reason}` | No popup is available; the payment cannot happen in the frame | Validate the URL, then navigate the **top-level** page to it. See §5.12 |
 | `suqo:result` | `{status, params, message?}` | The payment settled | Fire `onSuccess`/`onFailure` **exactly once** |
-| `suqo:unavailable` | `{reason}` | The session cannot be paid at all | Nothing required. Not a payment outcome — do **not** fire `onFailure` |
+| `suqo:unavailable` | `{reason}` | The session cannot be paid at all | Fire `onUnavailable(reason)`. Not a payment outcome — do **not** fire `onFailure` |
 
 `suqo:unavailable` carries one of `not-found`, `expired`, `spent`, `no-customer`, `no-methods`,
 `load-failed`. It is finer-grained than what the buyer is shown on purpose: `spent` and `expired`
@@ -278,7 +279,24 @@ It travels three paths on purpose, because each can be severed:
 
 So arriving two or three times is expected. Firing the merchant's handler twice is the worst bug
 available here (double fulfilment), so the host latches on first delivery. The latch is released
-only by a new `suqo:gateway` — a real second attempt, not a duplicate of the first.
+only by a new `suqo:gateway` — a real second attempt, not a duplicate of the first. The frame
+latches too: a result and the buyer closing the gateway window can settle the same attempt, and
+they race.
+
+**The return page posts with target `'*'`, and it is the one place in this protocol that does.**
+`postToHost` drops a message rather than address `'*'`. This cannot: the host takes a handle on
+the gateway window by name to close orphans, and that call reassigns the window's opener to the
+host — so naming our own origin would address a window on a different one and the browser would
+drop it silently, with no error. It cannot be narrowed either: `sessionStorage` does not reach
+the gateway's tab, and a return URL's query string is exactly what a gateway mangles (§5.2).
+
+What it *can* be is labelled. The frame leaves the session id in `localStorage` before opening
+the gateway and the return page puts it on the payload, so a listener that is not the intended
+block ignores it. A payload with **no** session id is still accepted — a return page from an
+older deploy sends none, and refusing those would drop real payments. One key per origin, so
+two checkouts in two tabs overwrite each other: this narrows the window, it does not close it.
+Anything holding an opener handle on the return window can still read the result; that is the
+residual risk, on record rather than papered over.
 
 ### 5.8 Three load deadlines, armed by real signals
 
@@ -420,7 +438,10 @@ Building either half again, in order:
    **before** calling pay (§5.13). Otherwise POST, then hand off; guard URLs to http(s).
 9. Return page: cancellation short-circuit (§5.6) → verify → `publishResult` on all three
    paths → skip `return_url` when `isGatewayWindow()`.
-10. `settled` renders a spinner and no verdict.
+10. `settled` is terminal for every status and renders the verdict — success, failed or
+    cancelled — not a spinner. It offers no retry: one block, one attempt, one outcome, so the
+    host's result latch is never released a second time. A merchant who wrote no callbacks
+    would otherwise leave the buyer on a spinner forever, including after a successful payment.
 11. Never post to the host's window. The protocol is one-directional (§3).
 
 **Host**

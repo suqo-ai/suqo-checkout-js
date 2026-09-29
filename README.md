@@ -118,10 +118,13 @@ SuqoCheckout.mount('suqo-checkout-block', {
   onReady:   function () {},
   onSuccess: function (params, message) {},          // gateway params + the backend's message
   onFailure: function (status, params, message) {},  // 'cancelled' | 'failed'
+  onUnavailable: function (reason) {},               // the session cannot be paid at all
 })
 
 SuqoCheckout.unmount('suqo-checkout-block')
-SuqoCheckout.configure({ origin, elementId, sessionId, flow, onReady, onSuccess, onFailure })
+SuqoCheckout.configure({
+  origin, elementId, sessionId, flow, onReady, onSuccess, onFailure, onUnavailable,
+})
 SuqoCheckout.origin   // getter — the currently resolved base URL
 ```
 
@@ -285,22 +288,34 @@ The sequence is fiddly and each step is load-bearing:
    because the result is only published after the return page has verified the payment with the
    backend; nothing is still in flight.
 
-### The block never announces the outcome — you do
+### The block states the outcome — you decide what happens next
 
-When a payment settles the block shows a spinner and calls `onSuccess` / `onFailure`. It
-displays no verdict of its own, on purpose: it is sitting inside your layout, it does not know
-what happens next — an order page, a receipt, a retry, your own error screen — and anything it
-declared would be a second, competing message beside yours.
+When a payment settles, the block calls `onSuccess` / `onFailure` and shows a short line of its
+own: "Payment successful.", "The payment did not go through.", or "Payment was cancelled before
+it completed." — or the gateway's own wording, when it sent any.
 
-**So both callbacks are effectively required.** A merchant who handles neither leaves the buyer
-watching a spinner: the payment is settled and reported, but nothing moves them on. The
-spinner is the gap between the result landing and your page taking over, which is why the demo
-redirects from `onFailure` rather than printing anything.
+It is a statement of fact, not a next step. It is sitting inside your layout and does not know
+what comes after — an order page, a receipt, your own error screen — so it says what happened
+and stops. **It never offers the buyer a second attempt**: one block, one attempt, one outcome.
+A buyer who wants to try again does so from your page, with a new checkout session.
+
+The callbacks are still where the work happens, but a merchant who writes neither no longer
+strands the buyer on a spinner forever, which is what used to happen.
 
 The buyer's payment is unaffected either way — it is already settled and your backend will have
 the webhook regardless of what the page does.
 
 ### `cancelled` is not `failed`
+
+`onFailure` also fires when the buyer closes the gateway window without paying — `'cancelled'`,
+with empty `params`, because there was no transaction to report.
+
+`onUnavailable(reason)` is separate from both, and fires when the session cannot be paid at
+all: `'not-found'`, `'expired'`, `'spent'`, `'no-customer'`, `'no-methods'` or `'load-failed'`.
+It is **not** a payment failure — nothing was attempted — so it does not go through
+`onFailure`, which would tell you a payment was tried and rejected. The block shows the buyer
+its own explanation; this is so your page can react to a session your integration created
+wrong, which is the most common thing to get wrong.
 
 `onFailure` receives `'cancelled'` when the buyer backed out at the gateway, and `'failed'`
 when a payment was attempted and rejected. Check `status` rather than treating everything that

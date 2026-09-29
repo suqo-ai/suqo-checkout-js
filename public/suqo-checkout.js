@@ -12,8 +12,11 @@
  * actually left to decide — which gateway, and consent — and nothing else. Nothing about the
  * customer appears on the merchant's page at all.
  *
- * Source of truth: the `js-checkout` project. `frontend/public/suqo-checkout.js` is a synced
- * copy — that is the one actually served. Edit here, then run `npm run sync`.
+ * Source of truth: `js-checkout/public/suqo-checkout.js`. The identical file at
+ * `frontend/public/suqo-checkout.js` is a copy, and the one actually served. Edit the
+ * js-checkout one, then run `npm run sync` *in that project* — `sync:check` fails the build
+ * if the two drift. Paths are spelled out because this comment ships in both files, where
+ * "here" would name a different directory in each.
  *
  * ES5 on purpose: this runs on whatever the merchant's site happens to be, which may be an
  * old template with no transpiler in front of it. No const/let, no arrow functions, no
@@ -28,8 +31,20 @@
 
   if (window.SuqoCheckout) return
 
-  /** Last-resort base URL, used when the origin cannot be derived any other way. */
-  var FALLBACK_ORIGIN = 'https://test.suqo.ai'
+  /**
+   * There is no last-resort base URL, deliberately.
+   *
+   * There used to be — `https://test.suqo.ai`, hardcoded — and it was the wrong shape of
+   * safety net. Every path that reaches it is a copy of this file that is not being served by
+   * a checkout deployment: self-hosted, inlined into a bundle, or behind a CDN. Guessing
+   * sandbox there means a merchant's *production* checkout quietly runs against test data and
+   * nothing about it looks broken.
+   *
+   * The loader is served by the checkout itself — `test.suqo.ai/suqo-checkout.js` for sandbox,
+   * `app.suqo.ai/suqo-checkout.js` for live — which is what makes the script-origin step below
+   * correct with no configuration at all. When that step cannot answer, the honest move is to
+   * refuse and say so.
+   */
 
   /** The container id looked for when the merchant names none. */
   var DEFAULT_CONTAINER_ID = 'suqo-checkout-block'
@@ -55,6 +70,7 @@
     resize: 'suqo:resize',
     gateway: 'suqo:gateway',
     redirect: 'suqo:redirect',
+    unavailable: 'suqo:unavailable',
     result: 'suqo:result',
   }
 
@@ -95,6 +111,7 @@
     onReady: null,
     onSuccess: null,
     onFailure: null,
+    onUnavailable: null,
   }
 
   // ───────────────────────── origin resolution ─────────────────────────
@@ -132,16 +149,32 @@
   /**
    * Resolution order, most specific first:
    *   per-call origin  →  data-suqo-origin on the container  →  configure()/
-   *   window.SUQO_CHECKOUT_ORIGIN  →  origin the script was served from  →  FALLBACK_ORIGIN
+   *   window.SUQO_CHECKOUT_ORIGIN  →  origin the script was served from
+   *
+   * Returns null when none of them answers, and the caller refuses to mount. See the note on
+   * the removed fallback above for why guessing is worse than failing.
    */
+  /** Said once: discovery re-runs on DOM mutations and would otherwise repeat this forever. */
+  var warnedNoOrigin = false
+
+  function warnNoOrigin() {
+    if (warnedNoOrigin) return
+    warnedNoOrigin = true
+    if (window.console && console.error) {
+      console.error(
+        '[suqo] Could not work out which SUQO checkout to load. This script is meant to be ' +
+          'served by the checkout itself — https://test.suqo.ai/suqo-checkout.js for sandbox, ' +
+          'https://app.suqo.ai/suqo-checkout.js for live. If you are self-hosting it, set the ' +
+          'origin explicitly with data-suqo-origin on the block or ' +
+          'SuqoCheckout.configure({ origin }).'
+      )
+    }
+  }
+
   function resolveOrigin(perCall) {
     var candidate =
-      perCall ||
-      defaults.origin ||
-      window.SUQO_CHECKOUT_ORIGIN ||
-      scriptOrigin() ||
-      FALLBACK_ORIGIN
-    return trimTrailingSlash(candidate)
+      perCall || defaults.origin || window.SUQO_CHECKOUT_ORIGIN || scriptOrigin() || null
+    return candidate ? trimTrailingSlash(candidate) : null
   }
 
   /**
@@ -155,6 +188,13 @@
   function buildUrl(opts) {
     var base = resolveOrigin(opts.origin)
     var url = opts.url || null
+
+    // Nothing could say which checkout serves this block. Refusing beats guessing: a guessed
+    // origin renders a block that looks fine and takes money in the wrong environment.
+    if (!base && !url) {
+      warnNoOrigin()
+      return null
+    }
     // `custom` is a URL given verbatim, so this script cannot know what is on the other end —
     // which is why `mountRedirect` refuses it: there is no session id to build a hosted URL from.
     var flow = url ? 'custom' : null
@@ -540,6 +580,7 @@
         onReady: opts.onReady,
         onSuccess: opts.onSuccess,
         onFailure: opts.onFailure,
+        onUnavailable: opts.onUnavailable,
       },
       loaded: false,
       alive: false,
@@ -601,7 +642,13 @@
   function mountRedirect(container, config, opts) {
     if (sessionFor(container)) unmount(container)
 
-    var href = hostedCheckoutUrl(resolveOrigin(config.origin), config.sessionId)
+    var origin = resolveOrigin(config.origin)
+    if (!origin) {
+      warnNoOrigin()
+      return null
+    }
+
+    var href = hostedCheckoutUrl(origin, config.sessionId)
     var label =
       opts.flowLabel ||
       container.getAttribute('data-suqo-flow-label') ||
@@ -630,6 +677,7 @@
         onReady: opts.onReady,
         onSuccess: opts.onSuccess,
         onFailure: opts.onFailure,
+        onUnavailable: opts.onUnavailable,
       },
       loaded: true,
       alive: true,
@@ -861,6 +909,20 @@
         navigateTop(session, data.url)
         break
 
+      case MSG.unavailable:
+        // The session cannot be paid: expired, already spent, never existed, or wired up
+        // without a customer. The block has rendered its own explanation to the buyer, so
+        // nothing needs doing here — but a merchant who is never told cannot tell a session
+        // their integration created wrong from one nobody clicked, which is the most common
+        // integration error there is.
+        //
+        // Not onFailure: no payment was attempted, and reporting one that was is worse than
+        // saying nothing. One callback for all six reasons, matching the other two SDKs:
+        // 'not-found', 'expired', 'spent', 'no-customer', 'no-methods', 'load-failed'.
+        var onUnavailable = handler(session, 'onUnavailable')
+        if (onUnavailable) onUnavailable(data.reason)
+        break
+
       case MSG.result:
         // The result deliberately travels more than one path — a same-origin channel from the
         // return page, plus a post to the opener and to the opener's parent — because any
@@ -991,6 +1053,7 @@
       if (options.onReady) defaults.onReady = options.onReady
       if (options.onSuccess) defaults.onSuccess = options.onSuccess
       if (options.onFailure) defaults.onFailure = options.onFailure
+      if (options.onUnavailable) defaults.onUnavailable = options.onUnavailable
       // A merchant who configures after the block is already in the DOM still gets it mounted.
       discover()
       return api

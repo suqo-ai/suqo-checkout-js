@@ -290,11 +290,21 @@ host — so naming our own origin would address a window on a different one and 
 drop it silently, with no error. It cannot be narrowed either: `sessionStorage` does not reach
 the gateway's tab, and a return URL's query string is exactly what a gateway mangles (§5.2).
 
-What it *can* be is labelled. The frame leaves the session id in `localStorage` before opening
-the gateway and the return page puts it on the payload, so a listener that is not the intended
-block ignores it. A payload with **no** session id is still accepted — a return page from an
-older deploy sends none, and refusing those would drop real payments. One key per origin, so
-two checkouts in two tabs overwrite each other: this narrows the window, it does not close it.
+What it *can* be is labelled, and only just. The frame leaves the session id in `localStorage`
+before opening the gateway and the return page puts it on the payload, so a listener that is not
+the intended block ignores it. Three limits, all of them load-bearing:
+
+- **Under storage partitioning an embedded frame's write is invisible to the popup.** The iframe
+  writes into storage filed under the merchant's site; the gateway window is first-party on the
+  checkout origin and reads a different store. So in the embedded case — the one this was added
+  for — the label is usually absent. It works on a direct visit, where both are first-party.
+- **A payload with no session id is accepted.** A return page from an older deploy sends none,
+  and refusing those would drop real payments. This is what keeps the label a narrowing rather
+  than a way to lose money.
+- **The key is cleared the moment it is read**, and again when the block reaches a terminal
+  state. An id that outlives its attempt gets stamped on the next payment's result, whose block
+  then rejects it as someone else's and waits for a result that has already been and gone.
+
 Anything holding an opener handle on the return window can still read the result; that is the
 residual risk, on record rather than papered over.
 
@@ -371,6 +381,29 @@ not expressible. Sending the form action and its fields *would* be — and would
 merchant's own JavaScript a signed gateway payload on their origin, which is worse than the open
 redirect §5.12 refuses.
 
+### 5.14 A closed gateway window is not an outcome
+
+The buyer closing the popup looks like a cancellation and is not one. The return page publishes
+its result only *after* its verify call resolves, and closing the window kills that request — so
+nothing will ever arrive to correct a guess made here.
+
+That leaves two possibilities the frame cannot tell apart: a buyer who abandoned at the
+gateway's own screen, and a buyer who paid and closed the tab while the return page was still
+verifying. Reporting `cancelled` is correct for the first and actively dangerous for the second:
+a merchant who re-offers the basket on cancel would charge someone who had already paid.
+
+So the frame reports nothing and says only what it knows — the window closed, and if the payment
+went through it will be confirmed. **The webhook is the answer to this question**, as §8 already
+says it is for the whole `suqo:redirect` surface.
+
+A grace period does not rescue the reporting version. There is nothing left in flight to wait
+for; it only makes the wrong answer rarer and harder to reproduce.
+
+A distinct status — `closed`, `unknown` — would be honest, and is the open door if merchants
+ever ask for the abandonment signal. It is not free: the status type, every host, the spec and
+each merchant integration move together, for a value whose only correct handling is "ask your
+backend".
+
 ---
 
 ## 6. Backend contract
@@ -442,7 +475,8 @@ Building either half again, in order:
     cancelled — not a spinner. It offers no retry: one block, one attempt, one outcome, so the
     host's result latch is never released a second time. A merchant who wrote no callbacks
     would otherwise leave the buyer on a spinner forever, including after a successful payment.
-11. Never post to the host's window. The protocol is one-directional (§3).
+11. **A closed gateway window posts nothing** — see §5.14.
+12. Never post to the host's window. The protocol is one-directional (§3).
 
 **Host**
 1. ES5, one IIFE, one global, all styles inline — it runs on whatever the merchant's site is.

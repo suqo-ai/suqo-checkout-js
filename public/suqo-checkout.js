@@ -645,7 +645,9 @@
     var origin = resolveOrigin(config.origin)
     if (!origin) {
       warnNoOrigin()
-      return null
+      // `api`, not null: every other refusal in `mount` returns it, and a merchant writing
+      // `SuqoCheckout.mount(...).configure(...)` would otherwise throw on this path alone.
+      return api
     }
 
     var href = hostedCheckoutUrl(origin, config.sessionId)

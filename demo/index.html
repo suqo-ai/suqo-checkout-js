@@ -150,6 +150,13 @@
           '&txn=' +
           encodeURIComponent(params.txn_id || params.transaction_uuid || '')
       },
+      // The frame asked for a bank-app handoff rather than attempting it itself — it is
+      // sandboxed and cannot navigate this page on its own. The SDK never navigates on this
+      // url by itself; what happens next is entirely this page's own call.
+      onIntent: function (url) {
+        log('onIntent', url)
+        window.location.href = url
+      },
     })
   </script>
 </body>

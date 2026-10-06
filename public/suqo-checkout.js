@@ -206,8 +206,17 @@
     }
 
     // Appended in exactly one place, so the hash rule above holds by construction rather
-    // than by remembering it at each branch.
-    return { url: url + '#parentOrigin=' + encodeURIComponent(window.location.origin), flow: flow }
+    // than by remembering it at each branch. `data-suqo-checkout` is used verbatim and may
+    // already carry its own `#fragment` — only the first `#` in a URL starts the real one, so
+    // a second `#parentOrigin=…` would be swallowed into that existing fragment's text rather
+    // than read back as its own value. `getHostOrigin()` on the other end parses with
+    // `[#&]parentOrigin=`, so joining with `&` when a hash is already present is what it
+    // expects either way.
+    var hashJoin = url.indexOf('#') === -1 ? '#' : '&'
+    return {
+      url: url + hashJoin + 'parentOrigin=' + encodeURIComponent(window.location.origin),
+      flow: flow,
+    }
   }
 
   /** The hosted checkout for a session — where both fallbacks send the buyer. */
@@ -344,6 +353,39 @@
   // module-level singleton.
 
   var sessions = []
+
+  /**
+   * One session object, shared by the iframe flow (`mount`) and the redirect flow
+   * (`mountRedirect`) so the two cannot drift apart on the fields every message handler and
+   * timer reads unconditionally — `failed`, `gatewayOpened`, `resultHandled`, `redirecting`,
+   * and the three timer slots start the same way regardless of which flow created the session.
+   * Only what actually differs between the two flows is passed in.
+   */
+  function createSession(fields) {
+    return {
+      container: fields.container,
+      iframe: fields.iframe || null,
+      spinner: fields.spinner || null,
+      link: fields.link || null,
+      url: fields.url,
+      origin: fields.origin,
+      flow: fields.flow,
+      checkoutSessionId: fields.checkoutSessionId,
+      previousPosition: fields.previousPosition,
+      previousMinHeight: fields.previousMinHeight,
+      handlers: fields.handlers,
+      loaded: !!fields.loaded,
+      alive: !!fields.alive,
+      ready: !!fields.ready,
+      failed: false,
+      gatewayOpened: false,
+      resultHandled: false,
+      redirecting: false,
+      loadTimer: null,
+      aliveTimer: null,
+      readyTimer: null,
+    }
+  }
 
   function sessionFor(container) {
     for (var i = 0; i < sessions.length; i++) {
@@ -562,7 +604,7 @@
     container.appendChild(spinner.el)
     container.appendChild(iframe)
 
-    var session = {
+    var session = createSession({
       container: container,
       iframe: iframe,
       spinner: spinner,
@@ -582,17 +624,7 @@
         onFailure: opts.onFailure,
         onUnavailable: opts.onUnavailable,
       },
-      loaded: false,
-      alive: false,
-      ready: false,
-      failed: false,
-      gatewayOpened: false,
-      resultHandled: false,
-      redirecting: false,
-      loadTimer: null,
-      aliveTimer: null,
-      readyTimer: null,
-    }
+    })
     sessions.push(session)
 
     session.loadTimer = window.setTimeout(function () {
@@ -664,34 +696,27 @@
     // Registered like any other block, so unmount() works uniformly and the observer's
     // sessionFor() check still stops it from mounting twice. Every consumer of this list now
     // guards on `iframe` being present.
-    sessions.push({
-      container: container,
-      iframe: null,
-      spinner: null,
-      link: link,
-      url: href,
-      origin: resolveOrigin(config.origin),
-      flow: 'redirect',
-      checkoutSessionId: config.sessionId,
-      previousPosition: container.style.position,
-      previousMinHeight: container.style.minHeight,
-      handlers: {
-        onReady: opts.onReady,
-        onSuccess: opts.onSuccess,
-        onFailure: opts.onFailure,
-        onUnavailable: opts.onUnavailable,
-      },
-      loaded: true,
-      alive: true,
-      ready: true,
-      failed: false,
-      gatewayOpened: false,
-      resultHandled: false,
-      redirecting: false,
-      loadTimer: null,
-      aliveTimer: null,
-      readyTimer: null,
-    })
+    sessions.push(
+      createSession({
+        container: container,
+        link: link,
+        url: href,
+        origin: resolveOrigin(config.origin),
+        flow: 'redirect',
+        checkoutSessionId: config.sessionId,
+        previousPosition: container.style.position,
+        previousMinHeight: container.style.minHeight,
+        handlers: {
+          onReady: opts.onReady,
+          onSuccess: opts.onSuccess,
+          onFailure: opts.onFailure,
+          onUnavailable: opts.onUnavailable,
+        },
+        loaded: true,
+        alive: true,
+        ready: true,
+      })
+    )
 
     return api
   }
@@ -890,6 +915,16 @@
         break
 
       case MSG.gateway:
+        // Only one physical window can ever exist under GATEWAY_WINDOW_NAME — a second
+        // `window.open(url, GATEWAY_WINDOW_NAME)` from another block reuses it rather than
+        // opening a new one, silently taking it over. So at most one session may believe it
+        // owns that window at a time: whichever block's frame posted this most recently. Any
+        // other session still marked `gatewayOpened` no longer has a window to be answered
+        // from, or `sessionAwaitingResult()` would hand it this payment's result instead of
+        // its own next one.
+        for (var otherIndex = 0; otherIndex < sessions.length; otherIndex++) {
+          if (sessions[otherIndex] !== session) sessions[otherIndex].gatewayOpened = false
+        }
         // Remember a window exists, so it can be closed if this page goes away.
         session.gatewayOpened = true
         // A fresh attempt: whatever the previous one resolved to is spent, so the next
@@ -1011,6 +1046,14 @@
     mountWithin(document)
   }
 
+  /** The attributes that can turn an already-present element into a mountable container. */
+  var DISCOVERY_ATTRS = [
+    CONTAINER_ATTR,
+    'id',
+    'data-suqo-checkout-session-id',
+    'data-suqo-session-id',
+  ]
+
   // Delegated from the document rather than bound once, so blocks rendered after this script
   // runs (SPA views, lazy sections, CMS widgets) work with no re-initialisation step.
   function watchForContainers() {
@@ -1020,19 +1063,35 @@
       var sawElement = false
 
       for (var i = 0; i < records.length; i++) {
-        var added = records[i].addedNodes
+        var record = records[i]
+        var added = record.addedNodes
         for (var j = 0; j < added.length; j++) {
           if (added[j].nodeType === 1) {
             mountWithin(added[j])
             sawElement = true
           }
         }
+
+        // A merchant whose checkout session arrives asynchronously often sets the session id
+        // on a `<div>` already in the DOM — a reactive framework's attribute binding, or a
+        // plain `setAttribute` — rather than inserting a fresh element. That produces no
+        // `addedNodes` at all, so without this branch the block never mounts: nothing here
+        // ever looks at that node again.
+        if (record.type === 'attributes' && record.target.nodeType === 1) {
+          mountWithin(record.target)
+          sawElement = true
+        }
       }
 
       // Once per batch, not once per node: the id lookup is document-wide, and a busy SPA
       // can add hundreds of nodes in a single record set.
       if (sawElement) mountContainer(document.getElementById(containerId()))
-    }).observe(document.documentElement, { childList: true, subtree: true })
+    }).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: DISCOVERY_ATTRS,
+    })
   }
 
   // ───────────────────────── public API ─────────────────────────

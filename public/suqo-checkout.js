@@ -72,7 +72,19 @@
     redirect: 'suqo:redirect',
     unavailable: 'suqo:unavailable',
     result: 'suqo:result',
+    intent: 'suqo:intent',
   }
+
+  /**
+   * Schemes this script will never hand to `onIntent`, regardless of who asked.
+   *
+   * This is not about whether the frame can be trusted — it is about what navigating to one of
+   * these does structurally. A merchant's `onIntent` handler is expected to do something like
+   * `location.href = url`; a `javascript:`/`data:`/`file:`/`blob:` URL run that way is a script
+   * execution primitive on the merchant's own page, not a bank-app handoff. Same list the RN SDK
+   * blocks for the same reason.
+   */
+  var BLOCKED_INTENT_SCHEMES = { javascript: true, data: true, file: true, blob: true }
 
   /**
    * Three deadlines, each for a distinct failure, and each armed by a real signal rather than
@@ -112,6 +124,14 @@
     onSuccess: null,
     onFailure: null,
     onUnavailable: null,
+    /**
+     * Called with a non-http(s) deeplink (`intent://…`, `fonepayApp://…`, …) the frame wants
+     * handed off to a bank/wallet app, when it is asking the host to do that rather than
+     * attempting the navigation itself. The merchant's own code decides whether and how to act
+     * on it — this script never navigates anywhere on an `onIntent` url by itself. See
+     * docs/protocol.md on `suqo:intent` for why this exists instead of the frame just doing it.
+     */
+    onIntent: null,
   }
 
   // ───────────────────────── origin resolution ─────────────────────────
@@ -623,6 +643,7 @@
         onSuccess: opts.onSuccess,
         onFailure: opts.onFailure,
         onUnavailable: opts.onUnavailable,
+        onIntent: opts.onIntent,
       },
     })
     sessions.push(session)
@@ -711,6 +732,7 @@
           onSuccess: opts.onSuccess,
           onFailure: opts.onFailure,
           onUnavailable: opts.onUnavailable,
+          onIntent: opts.onIntent,
         },
         loaded: true,
         alive: true,
@@ -946,6 +968,34 @@
         navigateTop(session, data.url)
         break
 
+      case MSG.intent:
+        // The frame is asking the host to hand off to a bank/wallet app, rather than attempting
+        // the navigation itself. This script never navigates anywhere on it — it only reaches a
+        // merchant's own `onIntent`, who decides whether and how to act on it from their own
+        // page. See docs/protocol.md on `suqo:intent` for why the frame cannot just do this
+        // itself from inside the sandbox, and why that stays true even via this message.
+        if (typeof data.url !== 'string' || !data.url) return
+
+        var schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(data.url.replace(/^\s+/, ''))
+        var scheme = schemeMatch ? schemeMatch[1].toLowerCase() : ''
+        if (!scheme || BLOCKED_INTENT_SCHEMES[scheme]) {
+          console.warn('[SuqoCheckout] refusing to forward an intent handoff with scheme:', scheme || '(none)')
+          return
+        }
+
+        var onIntent = handler(session, 'onIntent')
+        if (onIntent) {
+          onIntent(data.url)
+        } else {
+          console.warn(
+            '[SuqoCheckout] the checkout wants to hand off to ' +
+              data.url +
+              ', but no onIntent was configured — pass one to mount()/configure() to let the ' +
+              'buyer reach their bank app.'
+          )
+        }
+        break
+
       case MSG.unavailable:
         // The session cannot be paid: expired, already spent, never existed, or wired up
         // without a customer. The block has rendered its own explanation to the buyer, so
@@ -1115,6 +1165,7 @@
       if (options.onSuccess) defaults.onSuccess = options.onSuccess
       if (options.onFailure) defaults.onFailure = options.onFailure
       if (options.onUnavailable) defaults.onUnavailable = options.onUnavailable
+      if (options.onIntent) defaults.onIntent = options.onIntent
       // A merchant who configures after the block is already in the DOM still gets it mounted.
       discover()
       return api

@@ -122,11 +122,12 @@ SuqoCheckout.mount('suqo-checkout-block', {
   onSuccess: function (params, message) {},          // gateway params + the backend's message
   onFailure: function (status, params, message) {},  // 'cancelled' | 'failed'
   onUnavailable: function (reason) {},               // the session cannot be paid at all
+  onIntent: function (url) {},                       // a bank-app deeplink — see below
 })
 
 SuqoCheckout.unmount('suqo-checkout-block')
 SuqoCheckout.configure({
-  origin, elementId, sessionId, flow, onReady, onSuccess, onFailure, onUnavailable,
+  origin, elementId, sessionId, flow, onReady, onSuccess, onFailure, onUnavailable, onIntent,
 })
 SuqoCheckout.origin   // getter — the currently resolved base URL
 ```
@@ -331,6 +332,22 @@ about, so asking it yields "Transaction not found."
 
 To let a buyer try again, re-`mount()` the container: a fresh attempt opens a new gateway window
 and delivers a new result, while duplicates within one attempt stay suppressed.
+
+### `onIntent` — a bank-app deeplink, handed to you verbatim
+
+Some gateways hand off to a bank or wallet app through a non-`http(s)` deeplink (`intent://…`,
+`fonepayApp://…`) from somewhere this script cannot navigate on its own — the frame is sandboxed
+specifically so it cannot move your top-level page (see `docs/protocol.md` §5.12), and that
+holds here too. So it only ever asks: `onIntent(url)` fires with the raw deeplink, and **this
+script never navigates anywhere on it itself.** What you do — typically `location.href = url`,
+on your own page — is entirely your own code's decision.
+
+`javascript:`, `data:`, `file:` and `blob:` are refused before they would ever reach your
+handler, unconditionally. Everything else is passed through exactly as the gateway sent it, the
+same way `params` is — there is no allowlist of known bank schemes to keep in sync.
+
+If you don't pass `onIntent`, nothing breaks: the host warns to the console and the buyer is
+left exactly where they'd be without this feature, not stuck on a dead spinner.
 
 ### `return_url`, and when it is followed
 

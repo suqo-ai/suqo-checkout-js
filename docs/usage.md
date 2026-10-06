@@ -104,12 +104,13 @@ SuqoCheckout.mount('suqo-checkout-block', {
   onSuccess: function (params, message) {},          // gateway params + the backend's message
   onFailure: function (status, params, message) {},  // 'cancelled' | 'failed'
   onUnavailable: function (reason) {},                // the session cannot be paid at all
+  onIntent: function (url) {},                        // a bank-app deeplink — see below
 })
 
 SuqoCheckout.unmount('suqo-checkout-block')
 
 SuqoCheckout.configure({
-  origin, elementId, sessionId, flow, onReady, onSuccess, onFailure, onUnavailable,
+  origin, elementId, sessionId, flow, onReady, onSuccess, onFailure, onUnavailable, onIntent,
 })
 
 SuqoCheckout.origin   // getter — the currently resolved base URL
@@ -165,6 +166,20 @@ all — `'not-found'`, `'expired'`, `'spent'`, `'no-customer'`, `'no-methods'`, 
 It's **not** a payment failure (nothing was attempted), so it never goes through `onFailure`.
 It's usually a sign your integration created the session wrong — an expired or already-used id,
 most commonly.
+
+### `onIntent` — a bank-app deeplink, handed to you verbatim
+
+Some gateways hand off to a bank or wallet app through a non-`http(s)` deeplink (`intent://…`,
+`fonepayApp://…`). The frame can't navigate your page to one itself — it's sandboxed so it
+can't move your top-level page at all — so it only asks: `onIntent(url)` fires with the raw
+deeplink, and **the SDK never navigates anywhere on it itself.** What you do next — typically
+`location.href = url`, in your own page — is your own code's call.
+
+`javascript:`, `data:`, `file:` and `blob:` are refused before they'd ever reach your handler.
+Everything else passes through exactly as the gateway sent it, same as `params` does.
+
+No `onIntent` configured? Nothing breaks — the console gets a warning and the buyer is left
+exactly where they'd be without this feature, not stuck on a dead spinner.
 
 ## When the callbacks don't fire, and `return_url`
 

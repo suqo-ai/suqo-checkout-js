@@ -152,6 +152,7 @@ page is full of unrelated `postMessage` traffic (analytics, chat widgets, other 
 | `suqo:redirect` | `{url, reason}` | No popup is available; the payment cannot happen in the frame | Validate the URL, then navigate the **top-level** page to it. See §5.12 |
 | `suqo:result` | `{status, params, message?}` | The payment settled | Fire `onSuccess`/`onFailure` **exactly once** |
 | `suqo:unavailable` | `{reason}` | The session cannot be paid at all | Fire `onUnavailable(reason)`. Not a payment outcome — do **not** fire `onFailure` |
+| `suqo:intent` | `{url}` | The frame wants a non-http(s) deeplink handed to a bank/wallet app | Refuse `javascript:`/`data:`/`file:`/`blob:` outright; otherwise fire `onIntent(url)` verbatim. **Never navigate anywhere on it.** See §5.15 |
 
 `suqo:unavailable` carries one of `not-found`, `expired`, `spent`, `no-customer`, `no-methods`,
 `load-failed`. It is finer-grained than what the buyer is shown on purpose: `spent` and `expired`
@@ -404,6 +405,31 @@ ever ask for the abandonment signal. It is not free: the status type, every host
 each merchant integration move together, for a value whose only correct handling is "ask your
 backend".
 
+### 5.15 `suqo:intent` hands a deeplink to the merchant — it never navigates anything itself
+
+The frame cannot navigate `window.top` on its own — that is the sandbox working as designed
+(§5.12), and it stays true here too. A bank/wallet app handoff that needs to happen on the
+merchant's own page rather than inside the gateway popup is something only the frame can detect
+(it knows which gateway, and when), but only the host can act on without re-opening the exact
+hole §5.12 closes.
+
+So the frame only ever *asks*: it posts `suqo:intent` with the raw deeplink, and the host hands
+that string, unmodified, to the merchant's own `onIntent(url)` — nothing in this script ever
+calls `location.href` or `window.open` on it. Whether and how to navigate is the merchant's own
+code, on their own page, under their own trust boundary. This is deliberately the same shape as
+`onSuccess`/`onFailure`/`onUnavailable`: the frame reports, a named host callback decides.
+
+**The one thing the host still refuses unconditionally**: `javascript:`, `data:`, `file:` and
+`blob:` schemes never reach `onIntent`, full stop. This has nothing to do with whether the frame
+can be trusted — it is about what a merchant's `location.href = url` does structurally for each
+of those, independent of who asked. Everything else (`intent://…`, `fonepayApp://…`, any bank's
+own custom scheme) passes through verbatim; this script does not maintain an allowlist of known
+gateway schemes, the same way it does not maintain one for `params` keys.
+
+If a merchant has not configured `onIntent`, the host warns to the console and does nothing
+else — the buyer is left on the block exactly as if this feature did not exist, not stuck on a
+dead spinner.
+
 ---
 
 ## 6. Backend contract
@@ -492,6 +518,9 @@ Building either half again, in order:
 7. Latch the result per attempt; release on `suqo:gateway` (§5.7).
 8. Close the gateway window on `pagehide` — `pagehide`, never `unload`, which
    Permissions-Policy blocks in current Chrome.
+9. `suqo:intent`: refuse `javascript:`/`data:`/`file:`/`blob:` outright, then pass the url
+   verbatim to `onIntent`. Never navigate on it yourself — that is the one message where
+   forwarding instead of acting is the entire point (§5.15).
 
 ---
 

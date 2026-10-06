@@ -33,6 +33,7 @@ merchant page  →  public/suqo-checkout.js (this repo, "the host")
 | `demo/index.html`, `demo/failed.html` | A hostile host page for manual testing, served from repo root so `../public/suqo-checkout.js` resolves. |
 | `scripts/sync-to-frontend.mjs` | Copies the loader into `frontend/public/`; `--check` mode diffs instead of writing. |
 | `README.md` | Integration-facing contract: attributes, callbacks, message table, timeouts. |
+| `docs/usage.md` | Merchant-facing guide — same integration surface as the README, minus the repo-internal sections (deployment, sync workflow, local demo). Link this to merchants, not the README. |
 | `docs/protocol.md` | Implementation spec: full sequence diagram, every invariant (§5), backend contract, reimplementation checklist. |
 
 There is no `src/`, no bundler, no `node_modules` — `public/suqo-checkout.js` is shipped

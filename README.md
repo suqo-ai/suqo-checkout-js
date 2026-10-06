@@ -8,6 +8,9 @@ One file, `public/suqo-checkout.js`. No build step, no dependencies, ES5, one gl
 (`SuqoCheckout`). Every style is inlined on the elements it creates, so a host page's CSS
 cannot restyle the block's chrome and the chrome cannot leak styles out.
 
+Integrating this on a merchant site? [docs/usage.md](./docs/usage.md) is the merchant-facing
+guide — the same material below, without the repo-internal parts.
+
 **Reimplementing or changing either half? Read [docs/protocol.md](./docs/protocol.md) first.** It is the
 full contract — every message, every invariant, and why each one exists. The two halves ship
 from different repos, so a change to one that is not mirrored in the other fails silently.

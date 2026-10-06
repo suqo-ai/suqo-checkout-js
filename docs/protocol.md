@@ -430,6 +430,13 @@ If a merchant has not configured `onIntent`, the host warns to the console and d
 else — the buyer is left on the block exactly as if this feature did not exist, not stuck on a
 dead spinner.
 
+**This message is browser-embed only.** A native host (`@suqo/react-native`, or any
+`window.SuqoWebView`) has no sandboxed top-level page to route around in the first place — the
+WebView navigates in the *same* window regardless (§8), and `react-native-webview`'s navigation
+interception already lifts a non-http(s) scheme straight to the OS. The frame must still post
+`suqo:intent` only to a browser host; a native host that receives it anyway drops it rather than
+inventing a second, redundant way to reach the same OS picker.
+
 ---
 
 ## 6. Backend contract

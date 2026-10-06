@@ -815,7 +815,18 @@
       ALIVE_DEADLINE_MS / 1000 +
       's. The origin is reachable, so the likely causes are a Content-Security-Policy ' +
       'frame-ancestors directive on it, an extension blocking frames, or that URL serving ' +
-      'something other than the checkout. Open it directly to see what comes back.'
+      'something other than the checkout. Open it directly to see what comes back.' +
+      // The no-cors probe below follows redirects transparently, so an http:// origin that
+      // 30x's to https gets reported as "reachable" with no hint that the scheme changed —
+      // and a scheme change is exactly what makes every message fail `event.origin !==
+      // session.origin` silently, with nothing in the console to say why. Worth naming
+      // explicitly: it looks identical to a framing block from out here, but needs the
+      // opposite fix (match the scheme, not touch any CSP).
+      (session.url.indexOf('http://') === 0
+        ? ' If this origin is served over https in practice (a load balancer or CDN upgrading ' +
+          'http to https), that scheme change breaks every message this frame tries to send — ' +
+          'use https:// in data-suqo-origin / configure({origin}) instead.'
+        : '')
 
     var unreachable =
       'Nothing is answering at ' +
@@ -858,6 +869,24 @@
     }
   }
 
+  /**
+   * Tears down a stale failure panel when the frame turns out to be alive after all.
+   *
+   * A deadline firing means "nothing came back **in time**", not "nothing will ever come
+   * back" — a slow cold start can cross `ALIVE_DEADLINE_MS` and still arrive a moment later.
+   * Without this, any message that arrives post-deadline (`alive`, `ready`, even
+   * `unavailable`) would update `session` correctly while a failure panel the buyer is
+   * already looking at sits there forever, on top of whatever the frame goes on to render.
+   */
+  function clearFailure(session) {
+    if (!session.failed) return
+    session.failed = false
+    if (session.panel && session.panel.parentNode) {
+      session.panel.parentNode.removeChild(session.panel)
+    }
+    session.panel = null
+  }
+
   function failSession(session, reason, consoleHint) {
     if (session.failed || session.ready) return
     session.failed = true
@@ -893,6 +922,10 @@
       data.type === MSG.result ? sessionAwaitingResult() : sessionForFrame(event.source)
     if (!session) return
     if (event.origin !== session.origin) return
+
+    // Any message that gets this far proves the frame is alive and talking — including one
+    // that arrives after a load/alive/ready deadline already painted a failure panel over it.
+    clearFailure(session)
 
     switch (data.type) {
       case MSG.alive:

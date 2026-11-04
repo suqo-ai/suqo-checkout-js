@@ -264,7 +264,7 @@ decorative.
 
 ## The gateway window
 
-The buyer pays in a separate window, not in the block. The merchant's page never navigates.
+The buyer pays in a separate window, not in the block. The merchant's page does not navigate to it.
 The sequence is fiddly and each step is load-bearing:
 
 1. The **frame** opens the window, not the host. A click inside the frame is a user gesture
@@ -379,12 +379,18 @@ open. On two surfaces it will not be:
 |---|---|---|
 | Desktop or mobile browser | iframe + popup | `onSuccess` / `onFailure` |
 | WebView with multiple windows enabled | iframe + popup | `onSuccess` / `onFailure` |
-| WebView without it; in-app browsers (Instagram, Facebook, LINE) | the frame hands the page to SUQO's hosted checkout | **`return_url` + webhook only** |
+| WebView without it; in-app browsers (Instagram, Facebook, LINE) | the frame asks, and the script navigates the top-level page to SUQO's hosted checkout | **`return_url` + webhook only** |
 | You opted out with `data-suqo-flow="redirect"` | a link to SUQO's hosted checkout | **`return_url` + webhook only** |
 
 On the last two your page is gone before the payment settles, so nothing can call back into it.
 You cannot tell in advance which row a given buyer will land on — a buyer opening your link from
 Instagram's in-app browser gets a different row than the same buyer on desktop.
+
+The navigation in the in-app browser row is done by the script, not the frame: the sandboxed
+frame cannot move your page, so it asks, and the script does it. It happens without the buyer
+doing anything, and it replaces your document — anything held only in memory (an unsaved cart,
+SPA state, form input) is lost. Persist it before the buyer reaches the block, and use
+`return_url` to restore it. No callback fires on this path.
 
 > **If your page might ever be opened inside an app, the session you create must carry a
 > `return_url`.** It is the only way the buyer gets back to you.

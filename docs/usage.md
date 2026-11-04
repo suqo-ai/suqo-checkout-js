@@ -190,11 +190,17 @@ your page is gone before the payment settles:
 | Surface | What happens | You hear about it via |
 |---|---|---|
 | Desktop or mobile browser | Payment opens in a popup, on top of your page | `onSuccess` / `onFailure` |
-| In-app browser (Instagram, Facebook, LINE, some WebViews) | The block hands the page to SUQO's hosted checkout instead | **`return_url` + your webhook only** |
+| In-app browser (Instagram, Facebook, LINE, some WebViews) | The script navigates your top-level page to SUQO's hosted checkout, automatically | **`return_url` + your webhook only** |
 | You opted out with `data-suqo-flow="redirect"` | A link to SUQO's hosted checkout | **`return_url` + your webhook only** |
 
 You can't tell in advance which row a given buyer lands on — the same buyer gets a different
 path on desktop than from an Instagram link.
+
+The navigation in the in-app browser row is done by the script, not the frame: the sandboxed
+frame cannot move your page, so it asks, and the script does it. It happens without the buyer
+doing anything, and it replaces your document — anything held only in memory (an unsaved cart,
+SPA state, form input) is lost. Persist it before the buyer reaches the block, and use
+`return_url` to restore it. No callback fires on this path.
 
 > **If your page might ever be opened inside an app, the checkout session you create must
 > carry a `return_url`.** It's the only way that buyer gets back to you.
@@ -234,8 +240,8 @@ Transparent, and sized to its own content — there's no fixed height and no int
 The frame reports its height and the block applies it, so opening the bank picker inside the
 block grows it in your own page's flow rather than scrolling inside a box.
 
-The buyer pays in a separate window, not inside the frame or your page — your page never
-navigates. That window closes itself once the result is known, on failure as well as success,
+The buyer pays in a separate window, not inside the frame or your page — your page does not
+navigate to it. That window closes itself once the result is known, on failure as well as success,
 so the buyer isn't left to go find and close a leftover tab.
 
 If the block never finishes loading, it shows an explanatory panel with an "open in a new tab"
